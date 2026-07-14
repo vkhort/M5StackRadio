@@ -24,14 +24,12 @@
 #define MAX_STATION_URL_LEN   128
 
 // ============================================================
-//  ПИНЫ КНОПОК M5STICK-C PLUS
+//  ПИНЫ КНОПОК M5STACK-C PLUS
 // ============================================================
 #define BUTTON_HOLD_TIME_MS 600
 #define BTN_A_PIN 39 // Левая
 #define BTN_B_PIN 38 // Средняя
 #define BTN_C_PIN 37 // Правая
-
-
 
 
 // ============================================================
@@ -90,8 +88,14 @@
 #define GYRO_TASK_PRIORITY      2         // Тот же уровень, что и кнопки (опрос параллельный)
 #define NETWORK_TASK_PRIORITY   1
 
-#define CONTROL_TASK_DELAY_MS   50
+#define CONTROL_TASK_DELAY_MS   25
 #define NETWORK_TASK_DELAY_MS   100
+
+// ============================================================
+// ГЕОМЕТРИЯ ДИСПЛЕЯ M5STACK (ILI9341)
+// ============================================================
+#define SCREEN_WIDTH  320
+#define SCREEN_HEIGHT 240
 
 // === ОСТАЛЬНЫЕ СИСТЕМНЫЕ НАСТРОЙКИ ===
 #define DEFAULT_BRIGHTNESS      80
