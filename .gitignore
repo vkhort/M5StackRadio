@@ -1,0 +1,26 @@
+# Временные файлы сборки PlatformIO (самый главный мусор)
+.pio/
+.pioenvs/
+.piolibdeps/
+.clang_complete
+.gcc-flags.json
+
+# Настройки самой VS Code
+.vscode/.provider
+.vscode/launch.json
+.vscode/c_cpp_properties.json
+.vscode/tasks.json
+
+# Системные файлы операционных систем
+.DS_Store
+Thumbs.db
+
+test/APmode.html
+test/Changes.txt
+test/testWebServer.ino
+test/M5StackRadio.ino
+
+include/
+lib/README
+# Приватный файл контекста для ИИ
+AI_CONTEXT.md
