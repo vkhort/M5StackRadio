@@ -508,20 +508,22 @@ void WiFiConnect::setupWebServer() {
     // 1. ГЛАВНАЯ СТРАНИЦА (Рендеринг напрямую из глобальной RAM) 
     // ============================================================ 
     // Передаем [this], чтобы лямбда имела законный доступ к нашему _server
-    _server.on("/", HTTP_GET, [this](){ 
-        #if DEBUG_MODE 
-        Serial.println("[Web Core1] Запрос пульта из браузера. Отправка ответа..."); 
-        #endif 
-
-        extern String htmlWeb; 
-
-        // Настраиваем заголовки против кэширования через наш внутренний _server
+    _server.on("/", HTTP_GET, [this](){
+        extern String htmlWeb;
         _server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-        _server.sendHeader("Pragma", "no-cache");
-        _server.sendHeader("Expires", "-1");
+        _server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        _server.send(200, "text/html", "");
 
-        _server.send(200, "text/html", htmlWeb); 
-    }); 
+        size_t pos = 0;
+        const size_t chunkSize = 2500; 
+
+        while (pos < htmlWeb.length()) {
+            _server.sendContent(htmlWeb.substring(pos, pos + chunkSize));
+            pos += chunkSize;
+            vTaskDelay(pdMS_TO_TICKS(1)); 
+        }
+        _server.sendContent(""); 
+    });
 
     // ============================================================ 
     // 2. ПОЛУЧЕНИЕ КОНФИГА (Сборка JSON напрямую из глобальной RAM) 

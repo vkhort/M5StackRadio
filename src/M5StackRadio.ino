@@ -34,12 +34,6 @@ void setup() {
     auto cfg = M5.config();
     M5.begin(cfg); 
 
-    // 3. ФИЗИЧЕСКИЙ ВКЛЮЧАТЕЛЬ ДИНАМИКА CORE2
-    // Подаем питание на микросхему встроенного усилителя NS4168 (Пин 22)
-    pinMode(PIN_AMP_SPK_EN, OUTPUT);
-    digitalWrite(PIN_AMP_SPK_EN, HIGH); 
-
-
     // 2. Аппаратный запуск дисплея M5StickC Plus
     display.begin();
     
