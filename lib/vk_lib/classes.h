@@ -106,6 +106,7 @@ public:
     // Оставляем метод публичным для тестов и ручного вызова
     void setupWebServer(); 
     void handle();
+    void startAPMode();
 
 private:
     Mode _mode;
@@ -122,5 +123,4 @@ private:
 
     
     bool connectToWiFi(const String& ssid, const String& password, unsigned long timeoutMs);
-    void startAPMode();
 };

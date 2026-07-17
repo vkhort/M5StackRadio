@@ -84,15 +84,15 @@
 //  УДВОЕННЫЕ РАЗМЕРЫ СТЕКА ДЛЯ ЗАДАЧ FREERTOS (БЕЗОПАСНОСТЬ СЕТИ И ПЛЕЕРА)
 // =========================================================================
 #define AUDIO_TASK_STACK_SIZE   32768  // Было: 16384 (С запасом под тяжелые MP3 буферы)
-#define CONTROL_TASK_STACK_SIZE 16384  // Было: 8192  (Для стабильной отрисовки и логики)
-#define NETWORK_TASK_STACK_SIZE 32768  // Было: 16384 (Чтобы асинхронный сервер свободно переваривал 22 Кб)
-#define GYRO_TASK_STACK_SIZE    8192   // Было: 4096  (С запасом под высокоточные расчеты джойстика)
+#define CONTROL_TASK_STACK_SIZE  3072  // Было: 8192  (Для стабильной отрисовки и логики)
+#define NETWORK_TASK_STACK_SIZE  8192  // Было: 16384 (Чтобы асинхронный сервер свободно переваривал 22 Кб)
+//#define GYRO_TASK_STACK_SIZE     3072   // Было: 4096  (С запасом под высокоточные расчеты джойстика)
 
 
 #define AUDIO_TASK_PRIORITY     5         // Самый высокий приоритет для плавного звука
-#define CONTROL_TASK_PRIORITY   2
-#define GYRO_TASK_PRIORITY      2         // Тот же уровень, что и кнопки (опрос параллельный)
-#define NETWORK_TASK_PRIORITY   1
+#define CONTROL_TASK_PRIORITY   1
+//#define GYRO_TASK_PRIORITY      2         // Тот же уровень, что и кнопки (опрос параллельный)
+#define NETWORK_TASK_PRIORITY   2
 
 #define CONTROL_TASK_DELAY_MS   25
 #define NETWORK_TASK_DELAY_MS   100

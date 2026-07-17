@@ -97,9 +97,6 @@ bool Radio::begin(WorkSPIFFS::ConfigData& config) {
     // === НАЧАЛЬНЫЙ СТАТУС ===
     display.updatePlayStatus(_isPlaying);
 
-    // === ИНИЦИАЛИЗАЦИЯ GYRO JOYSTICK ===
-    _joystick.begin(); // Аппаратный запуск и автокалибровка нуля в покое
-
     _bufferMem = (uint8_t *)malloc(16 * 1024);
     
     // Создаем именно аналоговый ЦАП-выход
@@ -116,13 +113,12 @@ bool Radio::begin(WorkSPIFFS::ConfigData& config) {
             Radio* radio = (Radio*)param;
             while (true) {
                 radio->runAudio(); 
-                vTaskDelay(10 / portTICK_PERIOD_MS);
+                vTaskDelay(20 / portTICK_PERIOD_MS);
             }
         },
         "AudioTask", 4096, this, 1, nullptr, 0
     );
-//    return true;
-/*
+
     // --- Задача 2: Управление кнопками и логикой (CORE 1) ---
     xTaskCreatePinnedToCore(
         [](void* param) {
@@ -139,7 +135,7 @@ bool Radio::begin(WorkSPIFFS::ConfigData& config) {
         nullptr, 
         1 // Core 1
     );
-*/
+
     // --- Задача 3: Сетевые события веб-сервера и NTP (CORE 1) ---
     xTaskCreatePinnedToCore(
         [](void* param) {
@@ -158,27 +154,6 @@ bool Radio::begin(WorkSPIFFS::ConfigData& config) {
         1 // Core 1
     );
 
-    // --- Задача 4: Опрос гироскопа (Строго на CORE 1 с точным таймером) ---
-    xTaskCreatePinnedToCore(
-        [](void* param) {
-            Radio* radio = (Radio*)param;
-            TickType_t xLastWakeTime = xTaskGetTickCount();
-            const TickType_t xFrequency = pdMS_TO_TICKS(GYRO_SAMPLE_INTERVAL_MS);
-            #if DEBUG_MODE
-            Serial.println("[GyroTask] Высокоточный опрос гироскопа запущен на Core 1");
-            #endif
-            while (true) {
-                vTaskDelayUntil(&xLastWakeTime, xFrequency);
-                radio->runGyroJoystick(); // Вызываем шаг обработки джойстика
-            }
-        }, 
-        "GyroTask", 
-        GYRO_TASK_STACK_SIZE, 
-        this, 
-        GYRO_TASK_PRIORITY, 
-        nullptr, 
-        1 // Core 1
-    );
 
 #if DEBUG_MODE
     Serial.println("[Radio] Begin completed");
@@ -208,16 +183,28 @@ void Radio::stop() {
 }
 
 void Radio::togglePlay() {
-    if (_commandQueue == nullptr) return;
-    
-    // ИСПРАВЛЕНО: Вместо прямого вызова _audio, просто отправляем флаг переключения в очередь.
-    // runGyroJoystick() и кнопки вызовут именно этот безопасный метод!
-    AudioMessage msg = {CMD_TOGGLE, 0};
-    xQueueSend(_commandQueue, &msg, 0);
-    
     #if DEBUG_MODE
-    Serial.println("[Radio Core1] Команда CMD_TOGGLE отправлена в очередь");
+    Serial.println("[Radio] togglePlay() START");
     #endif
+    
+    if (_commandQueue == nullptr) {
+        #if DEBUG_MODE
+        Serial.println("[ERROR] _commandQueue == nullptr в togglePlay()!");
+        #endif
+        return;
+    }
+    
+    AudioMessage msg = {CMD_TOGGLE, 0};
+    
+    if (xQueueSend(_commandQueue, &msg, 0) == pdTRUE) {
+        #if DEBUG_MODE
+        Serial.println("[Radio] CMD_TOGGLE отправлен в очередь (УСПЕШНО)");
+        #endif
+    } else {
+        #if DEBUG_MODE
+        Serial.println("[ERROR] Не удалось отправить CMD_TOGGLE в очередь!");
+        #endif
+    }
 }
 
 void Radio::forceConnect() {
@@ -258,34 +245,53 @@ void Radio::stopPlaying() {
 // ============================================================
 
 void Radio::nextStation() {
-    if (_commandQueue == nullptr) return;
-
-    // БЕЗОПАСНО ДЛЯ ЛЕНТЯЕВ: Никаких блокировок по флагу _isPlaying!
-    // Просто закидываем "записку" в почтовый ящик, а вся магия авто-стопа 
-    // и авто-старта выполнится упорядоченно на Core 0 внутри processCommand.
-    AudioMessage msg = {CMD_NEXT, 0};
-    xQueueSend(_commandQueue, &msg, 0);
-
     #if DEBUG_MODE
-    Serial.println("[Radio Core1] Безусловная команда CMD_NEXT отправлена в очередь");
+    Serial.println("[Radio] nextStation() START");
     #endif
-}
-
-void Radio::previousStation() {
+    
     if (_commandQueue == nullptr) {
         #if DEBUG_MODE
-        Serial.println("[ERROR Core1] Command queue is null in previousStation!");
+        Serial.println("[ERROR] _commandQueue == nullptr в nextStation()!");
         #endif
         return;
     }
+    
+    AudioMessage msg = {CMD_NEXT, 0};
+    
+    if (xQueueSend(_commandQueue, &msg, 0) == pdTRUE) {
+        #if DEBUG_MODE
+        Serial.println("[Radio] CMD_NEXT отправлен в очередь (УСПЕШНО)");
+        #endif
+    } else {
+        #if DEBUG_MODE
+        Serial.println("[ERROR] Не удалось отправить CMD_NEXT в очередь!");
+        #endif
+    }
+}
 
-    // БЕЗОПАСНО ДЛЯ ЛЕНТЯЕВ: Шлем команду переключения назад без задержек и фильтров
-    AudioMessage msg = {CMD_PREV, 0};
-    xQueueSend(_commandQueue, &msg, 0);
-
+void Radio::previousStation() {
     #if DEBUG_MODE
-    Serial.println("[Radio Core1] Безусловная команда CMD_PREV отправлена в очередь");
+    Serial.println("[Radio] previousStation() START");
     #endif
+    
+    if (_commandQueue == nullptr) {
+        #if DEBUG_MODE
+        Serial.println("[ERROR] _commandQueue == nullptr в previousStation()!");
+        #endif
+        return;
+    }
+    
+    AudioMessage msg = {CMD_PREV, 0};
+    
+    if (xQueueSend(_commandQueue, &msg, 0) == pdTRUE) {
+        #if DEBUG_MODE
+        Serial.println("[Radio] CMD_PREV отправлен в очередь (УСПЕШНО)");
+        #endif
+    } else {
+        #if DEBUG_MODE
+        Serial.println("[ERROR] Не удалось отправить CMD_PREV в очередь!");
+        #endif
+    }
 }
 
 
@@ -403,52 +409,152 @@ void Radio::runNetwork() {
         }
     }
 }
+
 // ============================================================
 //  ОБРАБОТКА ФИЗИЧЕСКИХ КНОПОК (Выполняется на Core 1)
+//  Короткие нажатия (< 600 мс):
+//    BtnA -> Громкость -1 (по кругу)
+//    BtnB -> Play/Stop
+//    BtnC -> Громкость +1 (по кругу)
+//  Длинные нажатия (>= 600 мс):
+//    BtnA -> Следующая станция (по кругу)
+//    BtnB -> Сохранение конфигурации
+//    BtnC -> Предыдущая станция (по кругу)
 // ============================================================
 void Radio::handleButtons() {
     unsigned long now = millis();
     
-    // Читаем физические пины нижней гребенки Core2 по вашим родным макросам
+    // ---- ЗАЩИТА ОТ ДРЕБЕЗГА (ОБЩАЯ!) ----
+    static unsigned long lastDebounceTime = 0;
+    if (now - lastDebounceTime < 80) return;  // 80 мс антидребезг
+    lastDebounceTime = now;
+    
+    // ---- ЧТЕНИЕ КНОПОК ----
     bool pressLeft   = (digitalRead(BTN_A_PIN) == LOW);
     bool pressMiddle = (digitalRead(BTN_B_PIN) == LOW);
     bool pressRight  = (digitalRead(BTN_C_PIN) == LOW);
 
-    // 1. ЛЕВАЯ КНОПКА (BTN_A) — Громкость -1 по кругу
-    static bool leftTrigger = false;
-    if (pressLeft && !leftTrigger) {
-        leftTrigger = true;
-        int v = config.volume - 1;
-        if (v < 0) v = 9;
-        if (_commandQueue != nullptr) { AudioMessage msg = {CMD_VOLUME, v}; xQueueSend(_commandQueue, &msg, 0); }
-    } else if (!pressLeft) leftTrigger = false;
-
-    // 2. ЦЕНТРАЛЬНАЯ КНОПКА (BTN_B) — PLAY / STOP, долгое нажатие (>1 сек) — СОХРАНЕНИЕ
-    static unsigned long midStartMs = 0;
-    static bool midLongTriggered = false;
-    if (pressMiddle) {
-        if (midStartMs == 0) { midStartMs = now; midLongTriggered = false; }
-        if (!midLongTriggered && (now - midStartMs >= 1000)) {
-            midLongTriggered = true;
-            if (_commandQueue != nullptr) { AudioMessage msg = {CMD_SAVE, 0}; xQueueSend(_commandQueue, &msg, 0); }
+    // ============================================================
+    //  КНОПКА A (Левая)
+    // ============================================================
+    static unsigned long leftPressStartMs = 0;
+    static bool leftLongTriggered = false;
+    
+    if (pressLeft) {
+        if (leftPressStartMs == 0) {
+            leftPressStartMs = now;
+            leftLongTriggered = false;
+        }
+        if (!leftLongTriggered && (now - leftPressStartMs >= BUTTON_HOLD_TIME_MS)) {
+            leftLongTriggered = true;
+            if (_commandQueue != nullptr) {
+                AudioMessage msg = {CMD_NEXT, 0};
+                xQueueSend(_commandQueue, &msg, 0);
+                #if DEBUG_MODE
+                Serial.println("[BtnA] HOLD: NEXT");
+                #endif
+            }
         }
     } else {
-        if (midStartMs > 0) {
-            if (!midLongTriggered && (now - midStartMs < 1000)) {
-                if (_commandQueue != nullptr) { AudioMessage msg = {CMD_TOGGLE, 0}; xQueueSend(_commandQueue, &msg, 0); }
+        if (leftPressStartMs > 0) {
+            unsigned long duration = now - leftPressStartMs;
+            if (!leftLongTriggered && duration > 30 && duration < BUTTON_HOLD_TIME_MS) {
+                int newVol = config.volume - 1;
+                if (newVol < 0) newVol = 9;
+                config.volume = newVol;
+                
+                if (_commandQueue != nullptr) {
+                    AudioMessage msg = {CMD_VOLUME, newVol};
+                    xQueueSend(_commandQueue, &msg, 0);
+                    #if DEBUG_MODE
+                    Serial.printf("[BtnA] CLICK: Volume %d\n", newVol);
+                    #endif
+                    display.updateVolume(newVol);
+                }
             }
-            midStartMs = 0;
+            leftPressStartMs = 0;
         }
     }
 
-    // 3. ПРАВАЯ КНОПКА (BTN_C) — Следующая станция ВПЕРЕД по кругу
-    static bool rightTrigger = false;
-    if (pressRight && !rightTrigger) {
-        rightTrigger = true;
-        if (_commandQueue != nullptr) { AudioMessage msg = {CMD_NEXT, 0}; xQueueSend(_commandQueue, &msg, 0); }
-    } else if (!pressRight) rightTrigger = false;
-}
+    // ============================================================
+    //  КНОПКА B (Средняя)
+    // ============================================================
+    static unsigned long midPressStartMs = 0;
+    static bool midLongTriggered = false;
+    
+    if (pressMiddle) {
+        if (midPressStartMs == 0) {
+            midPressStartMs = now;
+            midLongTriggered = false;
+        }
+        if (!midLongTriggered && (now - midPressStartMs >= BUTTON_HOLD_TIME_MS)) {
+            midLongTriggered = true;
+            if (_commandQueue != nullptr) {
+                AudioMessage msg = {CMD_SAVE, 0};
+                xQueueSend(_commandQueue, &msg, 0);
+                #if DEBUG_MODE
+                Serial.println("[BtnB] HOLD: SAVE");
+                #endif
+            }
+        }
+    } else {
+        if (midPressStartMs > 0) {
+            unsigned long duration = now - midPressStartMs;
+            if (!midLongTriggered && duration > 30 && duration < BUTTON_HOLD_TIME_MS) {
+                if (_commandQueue != nullptr) {
+                    AudioMessage msg = {CMD_TOGGLE, 0};
+                    xQueueSend(_commandQueue, &msg, 0);
+                    #if DEBUG_MODE
+                    Serial.println("[BtnB] CLICK: TOGGLE");
+                    #endif
+                }
+            }
+            midPressStartMs = 0;
+        }
+    }
 
+    // ============================================================
+    //  КНОПКА C (Правая)
+    // ============================================================
+    static unsigned long rightPressStartMs = 0;
+    static bool rightLongTriggered = false;
+    
+    if (pressRight) {
+        if (rightPressStartMs == 0) {
+            rightPressStartMs = now;
+            rightLongTriggered = false;
+        }
+        if (!rightLongTriggered && (now - rightPressStartMs >= BUTTON_HOLD_TIME_MS)) {
+            rightLongTriggered = true;
+            if (_commandQueue != nullptr) {
+                AudioMessage msg = {CMD_PREV, 0};
+                xQueueSend(_commandQueue, &msg, 0);
+                #if DEBUG_MODE
+                Serial.println("[BtnC] HOLD: PREV");
+                #endif
+            }
+        }
+    } else {
+        if (rightPressStartMs > 0) {
+            unsigned long duration = now - rightPressStartMs;
+            if (!rightLongTriggered && duration > 30 && duration < BUTTON_HOLD_TIME_MS) {
+                int newVol = config.volume + 1;
+                if (newVol > 9) newVol = 0;
+                config.volume = newVol;
+                
+                if (_commandQueue != nullptr) {
+                    AudioMessage msg = {CMD_VOLUME, newVol};
+                    xQueueSend(_commandQueue, &msg, 0);
+                    #if DEBUG_MODE
+                    Serial.printf("[BtnC] CLICK: Volume %d\n", newVol);
+                    #endif
+                    display.updateVolume(newVol);
+                }
+            }
+            rightPressStartMs = 0;
+        }
+    }
+}
 
 // ============================================================
 //  startPlaying() - ФИЗИЧЕСКИЙ ЗАПУСК ИНТЕРНЕТ-СТРИМА (Core 0)
@@ -569,12 +675,6 @@ void Radio::syncNTP() {
         #endif
     }
 }
-// ============================================================
-//  СТАРЫЙ МЕРТВЫЙ КОД АКСЕЛЕРОМЕТРА ПОЛНОСТЬЮ УДАЛЕН ОТСЮДА
-// ============================================================
-// Методы handleTilt() и readAccelerometer() стерты. 
-// Вся обработка идет в runGyroJoystick() через класс GyroJoystick.
-
 
 // ============================================================
 //  ИНИЦИАЛИЗАЦИЯ ИНТЕРФЕЙСА ЭКРАНА (Выполняется на Core 1)
@@ -884,31 +984,31 @@ void Radio::processCommand(const AudioMessage& msg) {
 
         case CMD_NEXT: {
             // Запоминаем стартовый статус: играла ли музыка в момент нажатия кнопки/жеста
-//            bool wasPlayingBefore = _isPlaying;
+            bool wasPlayingBefore = _isPlaying;
             
             // 1. АВТО-СТОП: Если стрим активен, мягко глушим текущую станцию на Core 0
-//            if (wasPlayingBefore) {
-//                stopPlaying();
-//            }
+            if (wasPlayingBefore) {
+                stopPlaying();
+            }
             
             // 2. Линейно шагаем по индексу в глобальной оперативной памяти config
-//            config.currentStation++;
-//            if (config.currentStation >= config.stationCount) {
-//                config.currentStation = 0; // Закольцевали с 9-й на 0-ю
-//            }
+            config.currentStation++;
+            if (config.currentStation >= config.stationCount) {
+                config.currentStation = 0; // Закольцевали с 9-й на 0-ю
+            }
             
             // 3. Мгновенно выводим новое текстовое имя и номер канала на экран
-//            display.updateStationName(config.getCurrentStationName());
-//            drawChannelNumber();
+            display.updateStationName(config.getCurrentStationName());
+            drawChannelNumber();
             
             #if DEBUG_MODE
             Serial.printf("[AudioCore0] Канал переключен ВПЕРЕД. Индекс: %d, Название: %s\n", config.currentStation, config.getCurrentStationName().c_str());
             #endif
             
             // 4. АВТО-СТАРТ: Если музыка играла до переключения — мгновенно запускаем новый поток!
-//            if (wasPlayingBefore) {
-//                startPlaying(); // Сам откроет новый URL из config и зажжет зеленый PLAY
-//            }
+            if (wasPlayingBefore) {
+                startPlaying(); // Сам откроет новый URL из config и зажжет зеленый PLAY
+            }
             break;
         }
 
@@ -943,70 +1043,121 @@ void Radio::processCommand(const AudioMessage& msg) {
     } // Конец конструкции switch (msg.command)
 } // Финальная закрывающая скобка всего метода processCommand
 
-// ============================================================
-//  ОБРАБОТКА КОМАНД С ГИРОСКОПА (Выполняется на Core 1 каждые 20 мс)
-// ============================================================
-void Radio::runGyroJoystick() {
-    // Получаем импульсную команду от асинхронного алгоритма накопления жестов (0-5)
-    int cmd = _joystick.update();
-    
-    if (cmd != GYRO_CMD_NONE) {
-        #if DEBUG_MODE
-        Serial.printf("[Gyro Core1] Жест распознан! Код команды: %d\n", cmd);
-        #endif
-        
-        switch (cmd) {
-            case GYRO_CMD_SHAKE:
-                //togglePlay();           // Безопасно отправляет CMD_TOGGLE в очередь
-                break;
-            case GYRO_CMD_ROLL_UP:
-                //setVolume(config.volume + 1); // Безопасно отправляет CMD_VOLUME с новым шагом вверх
-                break;
-            case GYRO_CMD_ROLL_DOWN:
-                //setVolume(config.volume - 1); // Безопасно отправляет CMD_VOLUME с новым шагом вниз
-                break;
-            case GYRO_CMD_PITCH_FWD:
-                //nextStation();          // Безопасно отправляет CMD_NEXT в очередь
-                break;
-            case GYRO_CMD_PITCH_BWD:
-                //previousStation();      // Безопасно отправляет CMD_PREV в очередь
-                break;
-            default:
-                break;
-        }
-    }
-}
 
 // ============================================================
 //  ЗАДАЧА УПРАВЛЕНИЯ КНОПКАМИ И ИНТЕРФЕЙСОМ (Выполняется на Core 1 каждые 50 мс)
 // ============================================================
 void Radio::runControl() {
-return;
-    if (_commandQueue == nullptr) {
+    // Переменные для отслеживания кликов и удержания кнопки (сохраняют значения между вызовами)
+    static unsigned long btnA_time = 0;
+    static unsigned long btnC_time = 0;
+    static bool lastA = HIGH;
+    static bool lastB = HIGH;
+    static bool lastC = HIGH;
+
+    // Читаем физические уровни напрямую с процессора (LOW = нажато, HIGH = отпущено)
+    bool currentA = digitalRead(39); // Кнопка A (Левая)
+    bool currentB = digitalRead(38); // Кнопка B (Средняя)
+    bool currentC = digitalRead(37); // Кнопка C (Правая)
+
+    // ============================================================
+    // 1. ОБРАБОТКА КНОПКИ А (Левая — Переключение назад / Громкость -)
+    // ============================================================
+    if (currentA == LOW && lastA == HIGH) { // Момент клика
+        btnA_time = millis(); 
         #if DEBUG_MODE
-        Serial.println("[ERROR Core1] Очередь команд пуста в runControl!");
+        Serial.println("!!! [Control GPIO] BtnA: CLICKED !!!");
         #endif
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-        return;
+        previousStation();
     }
-    
-    // Опрашиваем физические кнопки M5 и боковую (антидребезг внутри)
-    handleButtons();
-    
-    // === ОБНОВЛЕНИЕ ЧАСОВ НА ЭКРАНЕ КАЖДУЮ СЕКУНДУ ===
-    static unsigned long lastSecond = 0;
-    unsigned long currentTime = millis();
-    
-    if (currentTime - lastSecond >= 1000) {
-        lastSecond = currentTime;
-        // Мягко обновляем секунды времени "HH:MM:SS" на экране из буфера времени NTP
-        display.drawTime(getTime());
+    // Удержание кнопки А дольше 800 мс уменьшает громкость
+    if (currentA == LOW && (millis() - btnA_time > 800)) { 
+        extern WorkSPIFFS::ConfigData config;
+        if (config.volume > 0) {
+            config.volume--;
+            this->setVolume(config.volume);
+            #if DEBUG_MODE
+            Serial.printf("[Control GPIO] BtnA Hold: volume down -> %d\n", config.volume);
+            #endif
+            btnA_time = millis() - 600; // Повторяем уменьшение каждые 200 мс, пока держим
+        }
     }
+
+    // ============================================================
+    // 2. ОБРАБОТКА КНОПКИ B (Средняя — Плей / Пауза)
+    // ============================================================
+    if (currentB == LOW && lastB == HIGH) { // Момент клика
+        #if DEBUG_MODE
+        Serial.println("!!! [Control GPIO] BtnB: CLICKED !!!");
+        #endif
+        togglePlay();
+        vTaskDelay(pdMS_TO_TICKS(150)); // Антидребезг контактов для триггера паузы
+    }
+
+    // ============================================================
+    // 3. ОБРАБОТКА КНОПКИ C (Правая — Переключение вперед / Громкость +)
+    // ============================================================
+    if (currentC == LOW && lastC == HIGH) { // Момент клика
+        btnC_time = millis();
+        #if DEBUG_MODE
+        Serial.println("!!! [Control GPIO] BtnC: CLICKED !!!");
+        #endif
+        nextStation();
+    }
+    // Удержание кнопки С дольше 800 мс увеличивает громкость
+    if (currentC == LOW && (millis() - btnC_time > 800)) {
+        extern WorkSPIFFS::ConfigData config;
+        if (config.volume < 9) {
+            config.volume++;
+            this->setVolume(config.volume);
+            #if DEBUG_MODE
+            Serial.printf("[Control GPIO] BtnC Hold: volume up -> %d\n", config.volume);
+            #endif
+            btnC_time = millis() - 600; // Повторяем увеличение каждые 200 мс, пока держим
+        }
+    }
+
+    // ============================================================
+    // 4. СОХРАНЕНИЕ СОСТОЯНИЯ ДЛЯ СЛЕДУЮЩЕГО ТАКТА
+    // ============================================================
+    lastA = currentA;
+    lastB = currentB;
+    lastC = currentC;
+
+    // ============================================================
+    // 5. ПРОВЕРКА ОЧЕРЕДИ КОМАНД (МЯГКАЯ, БЕЗ БЛОКИРОВКИ И RETURN)
+    // ============================================================
+    if (_commandQueue != nullptr) {
+        // Здесь будет код чтения из очереди, когда вы её восстановите.
+        // Например: WebCommand cmd;
+        // if (xQueueReceive(_commandQueue, &cmd, 0) == pdPASS) { обработка }
+    } 
+    #if DEBUG_MODE
+    else {
+        // Печатаем предупреждение без зависания и тормозов планировщика
+        static unsigned long lastLog = 0;
+        if (millis() - lastLog > 5000) { // Пишем в порт не чаще чем раз в 5 секунд!
+            Serial.println("[WARN Core1] Очередь команд пока не создана (_commandQueue == nullptr)");
+            lastLog = millis();
+        }
+    }
+    #endif
+
+    // ============================================================
+    // 5. ОБНОВЛЕНИЕ ВРЕМЕНИ НА ЭКРАНЕ
+    // ============================================================
+//    static unsigned long lastSecond = 0;
+//    if (now - lastSecond >= 1000) {
+//        lastSecond = now;
+//        display.drawTime(getTime());
+//    }
     
-    // 2. ИСПРАВЛЕНО: Каждые 50 мс проверяем, пора ли сдвинуть буквы бегущей строки трека.
-    // Метод handleMarquee сам отсчитает свои 350 мс без блокировок FreeRTOS!
-    handleMarquee();
+    // ============================================================
+    // 6. БЕГУЩАЯ СТРОКА
+    // ============================================================
+//    handleMarquee();
 }
+
 
 // ============================================================
 //  КОЛБЭК: АВТОМАТИЧЕСКИЙ ПЕРЕХВАТ МЕТАДАННЫХ ТРЕКА (Core 0)

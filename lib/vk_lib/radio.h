@@ -18,7 +18,6 @@
 
 #include "config.h"
 #include "classes.h"      // Содержит WorkSPIFFS::ConfigData
-#include "GyroJoystick.h"
 
 // ============================================================
 //  КОМАНДЫ ДЛЯ ОЧЕРЕДИ (Управление между ядрами)
@@ -62,7 +61,6 @@ public:
     void runAudio();          // Выполняется на Core 0 (Декодирование и I2S)
     void runControl();        // Выполняется на Core 1 (Опрос физических кнопок)
     void runNetwork();        // Выполняется на Core 1 (События Веб-сервера и NTP)
-    void runGyroJoystick();   // Выполняется на Core 1 (Опрос жестов джойстика)
 
     // ---- Геттеры (Для вывода информации на дисплей и в Веб) ----
     bool isPlaying() const { return _isPlaying; }
@@ -95,21 +93,20 @@ private:
     struct tm _timeInfo;
 
     // ---- Аудио-движок (ESP32-audioI2S) ----
-//    Audio _audio;
-    // 2. ИСПРАВЛЕНО: Меняем старый объект _audio на динамические указатели новой библиотеки
-AudioGeneratorMP3        *_mp3 = nullptr;
-AudioFileSourceHTTPStream *_file = nullptr;
-AudioFileSourceBuffer     *_buff = nullptr;
+    //    Audio _audio;
+        // 2. ИСПРАВЛЕНО: Меняем старый объект _audio на динамические указатели новой библиотеки
+    AudioGeneratorMP3        *_mp3 = nullptr;
+    AudioFileSourceHTTPStream *_file = nullptr;
+    AudioFileSourceBuffer     *_buff = nullptr;
 
-// ИСПРАВЛЕНО: Заменили AudioOutputInternalDAC на базовый класс AudioOutput
-AudioOutput              *_out = nullptr; 
+    // ИСПРАВЛЕНО: Заменили AudioOutputInternalDAC на базовый класс AudioOutput
+    AudioOutput              *_out = nullptr; 
 
     // ---- Текущее системное состояние ----
     bool _isPlaying;          // Флаг: играет сейчас радио или стоит на паузе
     String _currentMetadata;  // Буфер для названия текущей песни (бегущая строка)
 
     // ---- Аппаратные модули ----
-    GyroJoystick _joystick;          // Наш класс жестов
     WorkSPIFFS::ConfigData* _config;  // Указатель на структуру настроек памяти
 
     // ---- Потокобезопасная очередь команд FreeRTOS ----

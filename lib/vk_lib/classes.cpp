@@ -371,6 +371,7 @@ void WiFiConnect::setAPCredentials(const String& ssid, const String& password) {
     Serial.printf("[WiFiConnect] Изменены настройки встроенной AP: SSID=%s\n", apSSID.c_str());
     #endif
 }
+
 bool WiFiConnect::setupWiFi(WorkSPIFFS::ConfigData& config, unsigned long timeoutMs) {
     targetSSID = config.ssid;
     targetPassword = config.password;
@@ -400,16 +401,17 @@ bool WiFiConnect::setupWiFi(WorkSPIFFS::ConfigData& config, unsigned long timeou
         WiFi.setSleep(false); 
         
         // Настраиваем роуты управления плеером и запускаем асинхронный веб-сервер на Core 1
-        setupWebServer();
+//        setupWebServer();
         return true;
     }
+    _mode = Mode::AP;
 
     // Если за 15 секунд роутер не ответил — уходим в аварийный WiFi Manager
     #if DEBUG_MODE
     Serial.println("[WiFi] Ошибка подключения к роутеру, переходим в режим AP...");
     #endif
 
-    startAPMode();
+//    startAPMode();
 
     return false;
 }
@@ -455,16 +457,17 @@ void WiFiConnect::startAPMode() {
     IPAddress gateway(192, 168, 4, 1);
     IPAddress subnet(255, 255, 255, 0);
     WiFi.softAPConfig(local_IP, gateway, subnet);
-    WiFi.softAP(apSSID.c_str(), apPassword.c_str());
+    WiFi.softAP(config.ssid, config.password);
     _mode = Mode::AP;
 
     // Выводим IP-адрес и пароль точки доступа на экран M5StickC Plus
     extern Display display;
-    display.showAPInfo(WiFi.softAPIP().toString(), apSSID, apPassword);
+    display.showAPInfo(WiFi.softAPIP().toString(), config.ssid, config.password);
 
     // Настраиваем аварийную страницу ввода паролей и запускаем сервер настроек
     setupWebServer();
 }
+
 // ============================================================
 //  ГЕТТЕРЫ СЕТЕВОГО СТАТУСА И IP АДРЕСОВ
 // ============================================================
@@ -589,7 +592,23 @@ void WiFiConnect::disconnect() {
         extern WorkSPIFFS myFS;
         extern WorkSPIFFS::ConfigData config;
 
-        // 1. Считываем данные из браузера и пишем напрямую в глобальный config в RAM
+        // ✅ ДОБАВИТЬ: Чтение SSID и пароля
+        if (request->hasParam("ssid", true)) {
+            config.ssid = request->getParam("ssid", true)->value();
+            config.ssid.trim();  // Удаляем лишние пробелы
+            #if DEBUG_MODE
+            Serial.printf("[Web] SSID сохранен: %s\n", config.ssid.c_str());
+            #endif
+        }
+        if (request->hasParam("password", true)) {
+            config.password = request->getParam("password", true)->value();
+            // Пароль не обрезаем (пробелы могут быть частью пароля)
+            #if DEBUG_MODE
+            Serial.printf("[Web] Пароль сохранен: %s\n", config.password.c_str());
+            #endif
+        }
+
+        // 1. Считываем станции из браузера
         for (int i = 0; i < config.stationCount; i++) {
             String nameParam = "stationName[" + String(i) + "]";
             String urlParam = "stationURL[" + String(i) + "]";
@@ -602,6 +621,7 @@ void WiFiConnect::disconnect() {
             }
         }
         
+        // 2. Считываем громкость и индекс станции
         if (request->hasParam("volume", true)) {
             config.volume = constrain(request->getParam("volume", true)->value().toInt(), 0, 9);
         }
@@ -609,13 +629,11 @@ void WiFiConnect::disconnect() {
             config.currentStation = request->getParam("currentStation", true)->value().toInt();
         }
 
-        // Записываем обновленные сетевые настройки в файл /config на Flash-память SPIFFS
+        // 3. Сохраняем обновленный конфиг в SPIFFS
         myFS.saveConfig(config);
 
-        // 2. СИНХРОНИЗИРУЕМ С CORE 0 ЧЕРЕЗ КЛАСС RADIO БЕЗ ПРЯМОГО ВЫЗОВА ОЧЕРЕДИ
+        // 4. Синхронизируем с Core 0 через класс Radio
         extern Radio radio;
-        // Пинаем плеер текущим уровнем громкости. 
-        // Этот метод внутри radio.cpp сам потокобезопасно отправит нужный маркер в свою очередь!
         radio.setVolume(config.volume); 
         
         request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Saving on the fly...\"}");
@@ -775,6 +793,3 @@ void WiFiConnect::disconnect() {
 void WiFiConnect::handle() {
 
  }
-
-
-

@@ -3,6 +3,7 @@
 // ============================================================
 
 #include <Arduino.h>
+#include <M5Unified.h>
 #include "config.h"
 #include "classes.h"
 #include "radio.h"
@@ -21,7 +22,7 @@ String htmlWeb = "";
 // ============================================================
 void setup() {
     Serial.begin(115200);
-    delay(100);
+    delay(2000);
 
     #if DEBUG_MODE
     Serial.println("\n======================================================");
@@ -36,6 +37,13 @@ void setup() {
 
     // 2. Аппаратный запуск дисплея M5StickC Plus
     display.begin();
+    // 2. НАСТРОЙКА ПИНОВ КНОПОК (ПОСЛЕ M5.begin!)
+    pinMode(BTN_A_PIN, INPUT_PULLUP);
+    pinMode(BTN_B_PIN, INPUT_PULLUP);
+    pinMode(BTN_C_PIN, INPUT_PULLUP);
+    #if DEBUG_MODE
+    Serial.println("[SETUP] Кнопки сконфигурированы (INPUT_PULLUP)");
+    #endif
     
     // ИСПРАВЛЕНО: Выводим чистую стартовую заставку. 
     // На экране загорится: "WiFi: Connecting..." и "Stations: 0"
@@ -69,11 +77,12 @@ void setup() {
     Serial.println("[SYSTEM] Шаг 2: Инициализация Wi-Fi соединения...");
     #endif
     
+    wifi.setupWiFi(config, WIFI_TIMEOUT_MS);
     // ============================================================
     //  ОДНОКРАТНАЯ СБОРКА ВЕБ-СТРАНИЦЫ ПРИ СТАРТЕ
     // ============================================================
     htmlWeb.reserve(25000); // Бронируем память один раз на всё время работы устройства
-/*
+
     // 5. Анализируем результат подключения и запускаем аудио-задачи FreeRTOS
     if (wifi.isSTA()) {
         #if DEBUG_MODE
@@ -90,12 +99,10 @@ void setup() {
         // Один раз заменяем статичные маркеры
         htmlWeb.replace("{SSID}", config.ssid);
         htmlWeb.replace("{PASSWORD}", config.password);
-        // Метод connectToWiFi внутри себя использует неблокирующий vTaskDelay,
-        // поэтому опрос железа и вывод точек на экран пойдет плавно.
-        wifi.setupWiFi(config, WIFI_TIMEOUT_MS);
         
         // Передаем нашу живую глобальную структуру config в плеер
         radio.begin(config); 
+        wifi.setupWebServer();
     } else {
         #if DEBUG_MODE
         Serial.println("[Radio] Аппаратный плеер отключен. Устройство работает в режиме точки доступа (AP MODE)");
@@ -111,13 +118,13 @@ void setup() {
         htmlWeb.replace("{SSID}", config.ssid);
         htmlWeb.replace("{PASSWORD}", config.password);
 
-        wifi.setupWiFi(config, WIFI_TIMEOUT_MS);
-    }
+        wifi.startAPMode();
+   }
 
-    #if DEBUG_MODE
+#if DEBUG_MODE
     Serial.println("[SYSTEM] Настройка setup() успешно завершена. Система запущена.");
     #endif
-*/
+
 }
 
 // ============================================================
