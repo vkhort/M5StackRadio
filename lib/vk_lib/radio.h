@@ -9,7 +9,12 @@
 #include <WiFi.h>
 #include <time.h>
 #include <freertos/queue.h>
-#include "Audio.h"
+//#include "Audio.h"
+#include "AudioFileSourceHTTPStream.h"
+#include "AudioFileSourceBuffer.h"
+#include "AudioGeneratorMP3.h"
+#include "AudioOutputI2S.h" // Этот файл содержит и класс AudioOutputInternalDAC
+// #include "AudioOutputInternalDAC.h" // <-- КРИТИЧЕСКИЙ ДОБАВЛЕННЫЙ ИНКЛУД ДЛЯ СТРОКИ 102
 
 #include "config.h"
 #include "classes.h"      // Содержит WorkSPIFFS::ConfigData
@@ -90,7 +95,14 @@ private:
     struct tm _timeInfo;
 
     // ---- Аудио-движок (ESP32-audioI2S) ----
-    Audio _audio;
+//    Audio _audio;
+    // 2. ИСПРАВЛЕНО: Меняем старый объект _audio на динамические указатели новой библиотеки
+AudioGeneratorMP3        *_mp3 = nullptr;
+AudioFileSourceHTTPStream *_file = nullptr;
+AudioFileSourceBuffer     *_buff = nullptr;
+
+// ИСПРАВЛЕНО: Заменили AudioOutputInternalDAC на базовый класс AudioOutput
+AudioOutput              *_out = nullptr; 
 
     // ---- Текущее системное состояние ----
     bool _isPlaying;          // Флаг: играет сейчас радио или стоит на паузе
@@ -140,6 +152,9 @@ private:
     String _scrollText;         // Подготовленный текст с пробелами для прокрутки
     int _scrollIndex;           // Текущий индекс сдвига букв
     unsigned long _lastScrollMs; // Таймер для шага прокрутки (без блокировки FreeRTOS)
+
+    const int preallocateBufferSize = 16 * 1024;
+    uint8_t *_bufferMem = nullptr;
 };
 
 #endif // RADIO_H

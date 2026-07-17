@@ -69,14 +69,11 @@ void setup() {
     Serial.println("[SYSTEM] Шаг 2: Инициализация Wi-Fi соединения...");
     #endif
     
-    // Метод connectToWiFi внутри себя использует неблокирующий vTaskDelay,
-    // поэтому опрос железа и вывод точек на экран пойдет плавно.
-    wifi.setupWiFi(config);
     // ============================================================
     //  ОДНОКРАТНАЯ СБОРКА ВЕБ-СТРАНИЦЫ ПРИ СТАРТЕ
     // ============================================================
     htmlWeb.reserve(25000); // Бронируем память один раз на всё время работы устройства
-
+/*
     // 5. Анализируем результат подключения и запускаем аудио-задачи FreeRTOS
     if (wifi.isSTA()) {
         #if DEBUG_MODE
@@ -93,6 +90,9 @@ void setup() {
         // Один раз заменяем статичные маркеры
         htmlWeb.replace("{SSID}", config.ssid);
         htmlWeb.replace("{PASSWORD}", config.password);
+        // Метод connectToWiFi внутри себя использует неблокирующий vTaskDelay,
+        // поэтому опрос железа и вывод точек на экран пойдет плавно.
+        wifi.setupWiFi(config, WIFI_TIMEOUT_MS);
         
         // Передаем нашу живую глобальную структуру config в плеер
         radio.begin(config); 
@@ -110,11 +110,14 @@ void setup() {
         
         htmlWeb.replace("{SSID}", config.ssid);
         htmlWeb.replace("{PASSWORD}", config.password);
+
+        wifi.setupWiFi(config, WIFI_TIMEOUT_MS);
     }
 
     #if DEBUG_MODE
     Serial.println("[SYSTEM] Настройка setup() успешно завершена. Система запущена.");
     #endif
+*/
 }
 
 // ============================================================
@@ -124,6 +127,6 @@ void loop() {
     // ИСПРАВЛЕНО: Полностью разгружаем системную loopTask таску.
     // Микро-пауза в 10 мс дает планировщику FreeRTOS спокойно обслуживать 
     // наши основные тяжелые задачи (AudioTask на Core 0, GyroTask на Core 1)
-    delay(10); 
-//    vTaskDelay(portMAX_DELAY);
+    vTaskDelay(pdMS_TO_TICKS(100)); 
+
 }

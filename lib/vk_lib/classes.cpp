@@ -350,7 +350,7 @@ bool WorkSPIFFS::saveConfig(const ConfigData& data) {
 // ============================================================
 //  РЕАЛИЗАЦИЯ СЕТЕВОГО КЛАССА WiFiConnect
 // ============================================================
-
+/*
 WiFiConnect::WiFiConnect()
     : _mode(Mode::DISCONNECTED)
     , targetSSID("")      // Рекомендация: явно инициализируем внутренние строки
@@ -362,7 +362,7 @@ WiFiConnect::WiFiConnect()
     Serial.println("[WiFiConnect] Сетевой конструктор успешно вызван");
     #endif
 }
-
+*/
 void WiFiConnect::setAPCredentials(const String& ssid, const String& password) {
     apSSID = ssid;
     apPassword = password;
@@ -443,12 +443,18 @@ bool WiFiConnect::connectToWiFi(const String& ssid, const String& password, unsi
 
 void WiFiConnect::startAPMode() {
     WiFi.disconnect(true);
-    vTaskDelay(100 / portTICK_PERIOD_MS);
+    delay(100);
+    // vTaskDelay(100 / portTICK_PERIOD_MS);
     
     WiFi.mode(WIFI_AP); // Переводим передатчик строго в изолированный режим раздачи Wi-Fi
-    vTaskDelay(100 / portTICK_PERIOD_MS);
+    delay(100);
+    // vTaskDelay(100 / portTICK_PERIOD_MS);
     
     // Поднимаем аварийную Wi-Fi сеть для смартфона
+    IPAddress local_IP(192, 168, 4, 1);
+    IPAddress gateway(192, 168, 4, 1);
+    IPAddress subnet(255, 255, 255, 0);
+    WiFi.softAPConfig(local_IP, gateway, subnet);
     WiFi.softAP(apSSID.c_str(), apPassword.c_str());
     _mode = Mode::AP;
 
@@ -502,194 +508,273 @@ void WiFiConnect::disconnect() {
     #endif
 }
 
-void WiFiConnect::setupWebServer() {
-    
-    // ============================================================ 
-    // 1. ГЛАВНАЯ СТРАНИЦА (Рендеринг напрямую из глобальной RAM) 
-    // ============================================================ 
-    // Передаем [this], чтобы лямбда имела законный доступ к нашему _server
-    _server.on("/", HTTP_GET, [this](){
+
+ void WiFiConnect::setupWebServer() {
+    // Очищаем старые обработчики перед инициализацией
+    _server.reset();
+
+    // ============================================================
+    // 1. ГЛАВНАЯ СТРАНИЦА (Рендеринг напрямую из глобальной RAM)
+    // ============================================================
+    _server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+        #if DEBUG_MODE
+        Serial.println("[Web Core1] Мгновенный запрос из браузера. Отправка готового ответа...");
+        #endif
+        
+        // Подключаем нашу постоянную глобальную строку из главного файла
         extern String htmlWeb;
-        _server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
-        _server.setContentLength(CONTENT_LENGTH_UNKNOWN);
-        _server.send(200, "text/html", "");
-
-        size_t pos = 0;
-        const size_t chunkSize = 2500; 
-
-        while (pos < htmlWeb.length()) {
-            _server.sendContent(htmlWeb.substring(pos, pos + chunkSize));
-            pos += chunkSize;
-            vTaskDelay(pdMS_TO_TICKS(1)); 
-        }
-        _server.sendContent(""); 
+        
+        // ЭТАЛОННЫЙ ФИКС ИЗ M5STICK: Передаем прямой адрес массива байт в RAM без копирования!
+        AsyncWebServerResponse *response = request->beginResponse(
+            200, 
+            "text/html", 
+            (const uint8_t*)htmlWeb.c_str(), // Прямой адрес массива байт в RAM
+            htmlWeb.length()                 // Точная длина страницы
+        );
+        
+        // Жестко запрещаем браузеру кэшировать пульт
+        response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        response->addHeader("Pragma", "no-cache");
+        response->addHeader("Expires", "-1");
+        
+        // Отправляем контейнер в фоновый Wi-Fi стек
+        request->send(response);
     });
 
-    // ============================================================ 
-    // 2. ПОЛУЧЕНИЕ КОНФИГА (Сборка JSON напрямую из глобальной RAM) 
-    // ============================================================ 
-    _server.on("/config", HTTP_GET, [this](){ 
+    // ============================================================
+    // 2. ПОЛУЧЕНИЕ КОНФИГА (Сборка JSON напрямую из глобальной RAM)
+    // ============================================================
+    _server.on("/config", HTTP_GET, [](AsyncWebServerRequest *request){
+        #if DEBUG_MODE
+        Serial.println("[Web Core1] Запрос GET /config. Сборка JSON из RAM...");
+        #endif
+        
+        // Подключаем живую глобальную конфигурацию всего проекта
         extern WorkSPIFFS::ConfigData config;
-
-        String json = "{"; 
-        json += "\"ssid\":\"" + config.ssid + "\","; 
-        json += "\"password\":\"" + config.password + "\","; 
-        json += "\"volume\":" + String(config.volume) + ","; 
-        json += "\"currentStation\":" + String(config.currentStation) + ","; 
-        json += "\"stations\":["; 
-        for (int i = 0; i < config.stationCount; i++) { 
-            if (i > 0) json += ","; 
-            json += "{\"name\":\"" + config.stations[i].name + "\","; 
-            json += "\"url\":\"" + config.stations[i].url + "\"}"; 
-        } 
-        json += "]"; 
-        json += "}"; 
-
-        _server.send(200, "application/json", json); 
+        
+        String json;
+        // Защита памяти M5Stack: бронируем 3 Кб, чтобы строка собиралась без фрагментации кучи
+        json.reserve(3072); 
+        
+        json = "{";
+        json += "\"ssid\":\"" + config.ssid + "\",";
+        json += "\"password\":\"" + config.password + "\",";
+        json += "\"volume\":" + String(config.volume) + ",";
+        json += "\"currentStation\":" + String(config.currentStation) + ",";
+        json += "\"stations\":[";
+        
+        for (int i = 0; i < config.stationCount; i++) {
+            if (i > 0) json += ",";
+            json += "{\"name\":\"" + config.stations[i].name + "\",";
+            json += "\"url\":\"" + config.stations[i].url + "\"}";
+        }
+        
+        json += "]";
+        json += "}";
+        
+        // Запрещаем браузеру ПК кэшировать список станций
+        AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+        response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        request->send(response);
     });
 
-    // ============================================================ 
-    // 3. СОХРАНЕНИЕ КОНФИГА
-    // ============================================================ 
-    _server.on("/save", HTTP_POST, [this](){ 
-        String newSSID = ""; 
-        String newPass = ""; 
-        String pageMode = "STA"; 
-
-        // Выдергиваем параметры через наш внутренний _server
-        if (_server.hasArg("ssid"))     newSSID = _server.arg("ssid");
-        if (_server.hasArg("password")) newPass = _server.arg("password");
-        if (_server.hasArg("mode"))     pageMode = _server.arg("mode");
-
-        if (newSSID.length() > 0) { 
-            extern WorkSPIFFS myFS; 
-            extern WorkSPIFFS::ConfigData config; 
-
-            config.ssid = newSSID; 
-            config.password = newPass; 
-            myFS.saveConfig(config); 
-
-            _server.send(200, "text/plain", "OK"); 
-
-            if (pageMode == "AP") { 
-                #if DEBUG_MODE 
-                Serial.println("[Web-Save] Запрос из AP-режима. Отложенная перезагрузка..."); 
-                #endif 
-                xTaskCreatePinnedToCore( 
-                    [](void* param) { 
-                        vTaskDelay(1500 / portTICK_PERIOD_MS); 
-                        ESP.restart(); 
-                    }, 
-                    "RebootTask", 2048, nullptr, 1, nullptr, 1 
-                ); 
-            } 
-        } else { 
-            _server.send(400, "text/plain", "Bad Request"); 
-        } 
-    });
-
-    // ============================================================ 
-    // 4. AP РЕЖИМ: СОХРАНЕНИЕ WI-FI И ПЕРЕЗАГРУЗКА 
-    // ============================================================ 
-    _server.on("/connect", HTTP_POST, [this](){ 
+    // ============================================================
+    // 3. СОХРАНЕНИЕ КОНФИГА (Запись напрямую в глобальную RAM + Диск)
+    // ============================================================
+    _server.on("/save", HTTP_POST, [](AsyncWebServerRequest *request){ 
+        #if DEBUG_MODE
+        Serial.println("[Web Core1] Запрос POST /save из браузера. Обновляем глобальную RAM...");
+        #endif
+        
         extern WorkSPIFFS myFS;
         extern WorkSPIFFS::ConfigData config;
-        String ssid = ""; 
-        String password = ""; 
 
-        if (_server.hasArg("ssid"))     ssid = _server.arg("ssid");
-        if (_server.hasArg("password")) password = _server.arg("password");
-
-        if (ssid.length() > 0) { 
-            config.ssid = ssid; 
-            config.password = password; 
-            myFS.saveConfig(config); 
-        } 
-
-        _server.send(200, "application/json", "{\"status\":\"ok\"}"); 
-
-        xTaskCreatePinnedToCore([](void* p) { vTaskDelay(1500 / portTICK_PERIOD_MS); ESP.restart(); }, "APRebootTask", 2048, nullptr, 1, nullptr, 1);
-    }); 
-
-    // ============================================================ 
-    // 5. КОМАНДЫ РАДИО (STA режим — Управление плеером через очередь FreeRTOS) 
-    // ============================================================ 
-    _server.on("/cmd", [this](){ 
-        extern Radio radio;
-
-        if (!isSTA()) { 
-            _server.send(403, "application/json", "{\"status\":\"error\",\"message\":\"Not in STA mode\"}"); 
-            return; 
-        } 
-
-        if (_server.hasArg("action")) { 
-            String action = _server.arg("action"); 
-            if (action == "toggle")       radio.togglePlay(); 
-            else if (action == "next")    radio.nextStation(); 
-            else if (action == "prev")    radio.previousStation(); 
+        // 1. Считываем данные из браузера и пишем напрямую в глобальный config в RAM
+        for (int i = 0; i < config.stationCount; i++) {
+            String nameParam = "stationName[" + String(i) + "]";
+            String urlParam = "stationURL[" + String(i) + "]";
             
-            _server.send(200, "application/json", "{\"status\":\"ok\"}"); 
-        } else { 
-            _server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"No action\"}"); 
-        } 
-    }); 
+            if (request->hasParam(nameParam, true)) {
+                config.stations[i].name = request->getParam(nameParam, true)->value();
+            }
+            if (request->hasParam(urlParam, true)) {
+                config.stations[i].url = request->getParam(urlParam, true)->value();
+            }
+        }
+        
+        if (request->hasParam("volume", true)) {
+            config.volume = constrain(request->getParam("volume", true)->value().toInt(), 0, 9);
+        }
+        if (request->hasParam("currentStation", true)) {
+            config.currentStation = request->getParam("currentStation", true)->value().toInt();
+        }
 
-    // ============================================================ 
-    // 6. УСТАНОВКА ГРОМКОСТИ ИЗ ВЕБА (Шкала 0-9) 
-    // ============================================================ 
-    _server.on("/volume", [this](){ 
+        // Записываем обновленные сетевые настройки в файл /config на Flash-память SPIFFS
+        myFS.saveConfig(config);
+
+        // 2. СИНХРОНИЗИРУЕМ С CORE 0 ЧЕРЕЗ КЛАСС RADIO БЕЗ ПРЯМОГО ВЫЗОВА ОЧЕРЕДИ
         extern Radio radio;
-        extern WorkSPIFFS::ConfigData config;
-
-        if (!isSTA()) { 
-            _server.send(403, "application/json", "{\"status\":\"error\",\"message\":\"Not in STA mode\"}"); 
-            return; 
-        } 
-
-        if (_server.hasArg("volume")) { 
-            int vol = _server.arg("volume").toInt(); 
-            vol = constrain(vol, 0, 9); 
-            config.volume = vol; 
-            radio.setVolume(vol); 
-            _server.send(200, "application/json", "{\"status\":\"ok\"}"); 
-        } else { 
-            _server.send(400, "application/json", "{\"status\":\"error\",\"message\":\"No volume parameter\"}"); 
-        } 
+        // Пинаем плеер текущим уровнем громкости. 
+        // Этот метод внутри radio.cpp сам потокобезопасно отправит нужный маркер в свою очередь!
+        radio.setVolume(config.volume); 
+        
+        request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Saving on the fly...\"}");
     });
 
-    // ============================================================ 
-    // 7. ЖИВОЙ СТАТУС РАДИО (STA режим) 
-    // ============================================================ 
-    _server.on("/state", HTTP_GET, [this](){ 
+
+    // ============================================================
+    // AP РЕЖИМ: СОХРАНЕНИЕ WI-FI И ПЕРЕЗАГРУЗКА
+    // ============================================================
+    _server.on("/connect", HTTP_POST, [](AsyncWebServerRequest *request){
+        String ssid = "";
+        String password = "";
+        
+        if (request->hasParam("ssid", true))     ssid = request->getParam("ssid", true)->value();
+        if (request->hasParam("password", true)) password = request->getParam("password", true)->value();
+        
+        if (ssid.length() > 0) {
+            // Подключаем внешние глобальные ссылки на память всего проекта
+            extern WorkSPIFFS myFS;
+            extern WorkSPIFFS::ConfigData config;
+            
+            config.ssid = ssid;
+            config.password = password;
+            
+            // В AP-режиме пишем напрямую на Flash-диск, так как звук и другие таски спят
+            myFS.saveConfig(config); 
+        }
+        
+        // Мгновенно ставим в очередь отправки JSON-ответ для браузера ПК
+        request->send(200, "application/json", "{\"status\":\"ok\"}");
+        
+        // ЭТАЛОННЫЙ ПАТТЕРН: Отложенная перезагрузка через фоновую микро-задачу FreeRTOS.
+        // Дает серверу 1.5 секунды, чтобы полностью вытолкнуть TCP-пакет в сеть до сброса чипа!
+        xTaskCreatePinnedToCore(
+            [](void* p) {
+                vTaskDelay(pdMS_TO_TICKS(1500)); // Безопасная пауза в 1.5 секунды
+                ESP.restart();
+            }, 
+            "APRebootTask", 
+            2048, 
+            nullptr, 
+            1, 
+            nullptr, 
+            1
+        );
+    });
+
+    // ============================================================
+    // КОМАНДЫ РАДИО (STA режим — Управление плеером через очередь FreeRTOS)
+    // ============================================================
+    _server.on("/cmd", HTTP_GET, [this](AsyncWebServerRequest *request){
+        if (!isSTA()) {
+            request->send(403, "application/json", "{\"status\":\"error\",\"message\":\"Not in STA mode\"}");
+            return;
+        }
+        
+        // ИСПРАВЛЕНО: Открываем асинхронной лямбде в classes.cpp доступ к глобальному объекту радио
         extern Radio radio;
+        
+        if (request->hasParam("action")) {
+            // Получаем значение параметра текстовой команды
+            String action = request->arg("action");
+            
+            #if DEBUG_MODE
+            Serial.printf("[Web] Command: %s\n", action.c_str());
+            #endif
+            
+            // ПОЛНАЯ ПОТОКОБЕЗОПАСНОСТЬ: Методы класса Radio сами закинут нужные маркеры в xQueue
+            if (action == "toggle") {
+                radio.togglePlay();
+            } else if (action == "next") {
+                radio.nextStation();
+            } else if (action == "prev") {
+                radio.previousStation();
+            }
+            
+            request->send(200, "application/json", "{\"status\":\"ok\"}");
+        } else {
+            request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"No action\"}");
+        }
+    });
 
-        if (!isSTA()) { 
-            _server.send(403, "application/json", "{\"status\":\"error\",\"message\":\"Not in STA mode\"}"); 
-            return; 
-        } 
 
-        String json = "{"; 
-        json += "\"stationName\":\"" + radio.getCurrentStationName() + "\","; 
+    // ============================================================
+    // УСТАНОВКА ГРОМКОСТИ ИЗ ВЕБА (Шкала 0-9, БЕЗ автосохранения на диск)
+    // ============================================================
+    _server.on("/volume", HTTP_POST, [this](AsyncWebServerRequest *request){
+        if (!isSTA()) {
+            request->send(403, "application/json", "{\"status\":\"error\",\"message\":\"Not in STA mode\"}");
+            return;
+        }
+        
+        if (request->hasParam("volume", true)) {
+            int vol = request->getParam("volume", true)->value().toInt();
+            vol = constrain(vol, 0, 9); // Ограничиваем строго в рамках шкалы 0-9
+            
+            #if DEBUG_MODE
+            Serial.printf("[Web] Volume set to: %d\n", vol);
+            #endif
+            
+            // ИСПРАВЛЕНО: Связываем локальный контекст с глобальной RAM проекта M5Stack
+            extern WorkSPIFFS::ConfigData config;
+            extern Radio radio;
+            
+            // СИНХРОНИЗАЦИЯ RAM: Обновляем громкость в единой глобальной RAM-переменной.
+            config.volume = vol;
+            
+            // Пинаем плеер. Метод безопасно закинет CMD_VOLUME в очередь для Core 0
+            radio.setVolume(vol);
+            
+            request->send(200, "application/json", "{\"status\":\"ok\"}");
+        } else {
+            request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"No volume parameter\"}");
+        }
+    });
+
+    // ============================================================
+    // 6. ЖИВОЙ СТАТУС РАДИО (STA режим — Опрос браузером раз в секунду)
+    // ============================================================
+    _server.on("/state", HTTP_GET, [this](AsyncWebServerRequest *request){
+        if (!isSTA()) {
+            request->send(403, "application/json", "{\"status\":\"error\",\"message\":\"Not in STA mode\"}");
+            return;
+        }
+        
+        // ИСПРАВЛЕНО: Открываем доступ к глобальному объекту радио для classes.cpp
+        extern Radio radio;
+        
+        String json;
+        // ОПТИМИЗАЦИЯ: Резервируем память, чтобы куча не фрагментировалась при ежесекундном опросе
+        json.reserve(256); 
+        
+        // Формируем легкий JSON-пакет, считывая живые данные из RAM-памяти запущенного плеера
+        json = "{";
+        json += "\"stationName\":\"" + radio.getCurrentStationName() + "\",";
         json += "\"currentStation\":" + String(radio.getCurrentStationIndex()) + ","; 
         json += "\"volume\":" + String(radio.getVolume()) + ","; 
-        json += "\"isPlaying\":" + String(radio.isPlaying() ? "true" : "false"); 
-        json += "}"; 
+        json += "\"isPlaying\":" + String(radio.isPlaying() ? "true" : "false");
+        json += "}";
+        
+        // Запрещаем браузеру кэшировать живой статус устройства
+        AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+        response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+        request->send(response);
+    });
 
-        _server.send(200, "application/json", json); 
-    }); 
 
-    // Физический старт нашего приватного сервера
-    _server.begin(); 
-    #if DEBUG_MODE 
-    Serial.println("[WebServer] Синхронный сервер класса успешно запущен!"); 
-    #endif 
-}
+    // Физический старт асинхронного сервера (СТРОГО ВНУТРИ метода setupWebServer)
+    _server.begin();
+    
+    #if DEBUG_MODE
+    Serial.println("[WebServer] Асинхронный сервер успешно запущен и слушает порт 80.");
+    #endif
+} // Закрывающая скобка метода void WiFiConnect::setupWebServer()
 
-// ============================================================
-// ПУБЛИЧНЫЙ МЕТОД-МОСТ ДЛЯ ОБСЛУЖИВАНИЯ СИНХРОННОГО СЕРВЕРА
-// ============================================================
+// Публичный метод-мост оставляем пустым для асинхронного режима
 void WiFiConnect::handle() {
-    // Пинаем наш внутренний приватный сервер, чтобы он 
-    // обрабатывал входящие запросы от браузера Chrome/Safari
-    _server.handleClient();
-}
+
+ }
+
+
+

@@ -7,7 +7,7 @@
 //  НАСТРОЙКИ WI-FI ПО УМОЛЧАНИЮ
 //  (используются, если нет сохраненного конфига)
 // ============================================================
-#define DEFAULT_SSID     "VK_Radio"
+#define DEFAULT_SSID     "M5_Radio"
 #define DEFAULT_PASSWORD "12345678"
 
 // ============================================================
@@ -56,6 +56,12 @@
 #define GYRO_CMD_ROLL_UP        3        // Volume +
 #define GYRO_CMD_PITCH_BWD      4        // Station -
 #define GYRO_CMD_PITCH_FWD      5        // Station +
+
+// Настройки аудио-тракта (для M5Stack Classic управляется через M5Unified)
+// Передаем -1, чтобы ESP32-audioI2S не переназначала пины поверх M5Unified
+#define I2S_BCLK_PIN        -1
+#define I2S_LRC_PIN         -1
+#define I2S_DIN_PIN         25
 
 // ============================================================
 //  НАСТРОЙКИ ВРЕМЕНИ (NTP) И СЕТИ

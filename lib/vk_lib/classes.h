@@ -7,7 +7,8 @@
 #include <Arduino.h>
 #include <SPIFFS.h>
 #include <WiFi.h>
-#include <WebServer.h> // Обязательно подключаем стандартный сервер вместо AsyncWebServer
+#include <ESPAsyncWebServer.h>
+//#include <WebServer.h> // Обязательно подключаем стандартный сервер вместо AsyncWebServer
 
 #include "config.h"
 
@@ -88,7 +89,7 @@ class WiFiConnect {
 public:
     enum class Mode { STA, AP, DISCONNECTED, ERROR };
     
-    WiFiConnect();
+    WiFiConnect() : _server(80) {} // Инициализация на 80 порту
     void setAPCredentials(const String& ssid, const String& password);
     bool setupWiFi(WorkSPIFFS::ConfigData& config, unsigned long timeoutMs = 15000);
     
@@ -116,7 +117,9 @@ private:
     // === СЕРВЕР СНОВА ДОМА (ВНУТРИ КЛАССА!) ===
     // Физически создаем объект синхронного сервера на 80-м порту
     // Строку extern WebServer server из классов полностью убираем!
-    WebServer _server{80}; 
+    // WebServer _server{80};
+    AsyncWebServer _server; // Переводим сервер в асинхронный режим
+
     
     bool connectToWiFi(const String& ssid, const String& password, unsigned long timeoutMs);
     void startAPMode();

@@ -2,6 +2,8 @@
 //  radio.cpp - Реализация класса Radio
 // ============================================================
 
+#define ESP32 1 // Защита для инклудов ЦАП
+#include "AudioOutputI2S.h"
 #include "radio.h"
 #include "config.h"
 #include "classes.h"
@@ -98,48 +100,29 @@ bool Radio::begin(WorkSPIFFS::ConfigData& config) {
     // === ИНИЦИАЛИЗАЦИЯ GYRO JOYSTICK ===
     _joystick.begin(); // Аппаратный запуск и автокалибровка нуля в покое
 
-    // ============================================================
-    //  АНТИ-ФРАГМЕНТАЦИЯ: Бронируем буфер MP3-декодера в чистой куче!
-    // ============================================================
-    // Настраиваем ножки I2S звукового чипа Hat SPK2 ПРЯМО СЕЙЧАС, пока память чиста
-    _audio.setPinout(I2S_BCLK_PIN, I2S_LRC_PIN, I2S_DIN_PIN);
+    _bufferMem = (uint8_t *)malloc(16 * 1024);
     
-    // ВАРИАНТ А: Вызываем встроенный метод библиотеки, который принудительно 
-    // выделяет память под MP3-декодер прямо сейчас, не дожидаясь подключения к сети!
-    // (Если в вашей версии библиотеки этот метод называется иначе, используем Вариант Б)
-//    _audio.allocate_buffers(); 
+    // Создаем именно аналоговый ЦАП-выход
+    AudioOutputI2S *dacOut = new AudioOutputI2S(0, AudioOutputI2S::INTERNAL_DAC);
+    dacOut->SetOutputModeMono(true); // В твоем успешном тесте это сработало!
+    
+    // Записываем его в наш универсальный указатель _out
+    _out = dacOut;
+    _out->SetGain((float)config.volume / 9.0f);
 
-    // ВАРИАНТ Б (Если Вариант А не скомпилируется): 
-    // Скармливаем синтаксически корректный, но несуществующий локальный хост. 
-    // Библиотека принудительно инициализирует и зафиксирует в RAM буферы MP3-декодера, 
-    // затем тихо вылетит по тайм-ауту сети, но ПАМЯТЬ ОСТАНЕТСЯ ЗАБРОНИРОВАНА ЗА НАМИ!
-    // _audio.connecttohost("http://localhost/fake.mp3"); 
-
-    // ============================================================
-    //  СОЗДАНИЕ ЗАДАЧ FREERTOS
-    // ============================================================
-
-    // --- Задача 1: Аудиопоток (Строго на CORE 0) ---
+    // Запуск задачи обработки аудио в FreeRTOS
     xTaskCreatePinnedToCore(
         [](void* param) {
             Radio* radio = (Radio*)param;
-            vTaskDelay(2000 / portTICK_PERIOD_MS); // Даем системе 2 сек полностью поднять сетевые сокеты
-            #if DEBUG_MODE
-            Serial.println("[AudioTask] Directly starting stream on Core 0...");
-            #endif
             while (true) {
-                radio->runAudio(); // Крутит буферы и декодер I2S
-                vTaskDelay(AUDIO_TASK_DELAY_MS / portTICK_PERIOD_MS);
+                radio->runAudio(); 
+                vTaskDelay(10 / portTICK_PERIOD_MS);
             }
-        }, 
-        "AudioTask", 
-        AUDIO_TASK_STACK_SIZE, 
-        this, 
-        AUDIO_TASK_PRIORITY, 
-        nullptr, 
-        0 // Строго Core 0
+        },
+        "AudioTask", 4096, this, 1, nullptr, 0
     );
-
+//    return true;
+/*
     // --- Задача 2: Управление кнопками и логикой (CORE 1) ---
     xTaskCreatePinnedToCore(
         [](void* param) {
@@ -156,7 +139,7 @@ bool Radio::begin(WorkSPIFFS::ConfigData& config) {
         nullptr, 
         1 // Core 1
     );
-
+*/
     // --- Задача 3: Сетевые события веб-сервера и NTP (CORE 1) ---
     xTaskCreatePinnedToCore(
         [](void* param) {
@@ -255,16 +238,16 @@ void Radio::forceConnect() {
 
 
 void Radio::stopPlaying() {
-    #if DEBUG_MODE
-    Serial.println("[AudioCore0] Физическая остановка декодера I2S");
-    #endif
-
-    _audio.stopSong();              // Останавливаем физический декодер
+    if (_mp3) {
+        _mp3->stop();
+        delete _mp3;
+        _mp3 = nullptr;
+    }
+    if (_buff) { delete _buff; _buff = nullptr; }
+    if (_file) { delete _file; _file = nullptr; }
     _isPlaying = false;
-    display.updatePlayStatus(false); // Выводим красный статус STOP на экран
-    _currentMetadata = "";
-    display.updateMetadata("");     // Очищаем экран от старого названия трека
 }
+
 
 // ============================================================
 //  УПРАВЛЕНИЕ СТАНЦИЯМИ И ГРОМКОСТЬЮ (Вызываются на Core 1 -> Отправляют на Core 0)
@@ -325,31 +308,16 @@ void Radio::setVolume(int vol) {
 //  ОПТИМИЗИРОВАННЫЙ ЦИКЛ ДЕКОДЕРА АУДИО (Строго на Core 0)
 // ============================================================
 void Radio::runAudio() {
-    if (_commandQueue == nullptr) {
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-        return;
-    }
-
-    // 1. Атомарная проверка команд из очереди FreeRTOS (0 тиков ожидания, чтобы не тормозить цикл)
     AudioMessage msg;
     if (xQueueReceive(_commandQueue, &msg, 0) == pdTRUE) {
-        processCommand(msg); // Физически переключаем станции/громкость на Core 0
+        processCommand(msg); 
     }
 
-    // 2. Декодирование и прокрутка аудиопотока
-    if (_isPlaying) {
-        // Наполняем I2S-буфер на максимальной скорости процессора
-        _audio.loop();
-        
-        #if DEBUG_MODE
-        static unsigned long lastAudioLog = 0;
-        if (millis() - lastAudioLog > 5000) { // Лог раз в 5 секунд
-            lastAudioLog = millis();
-            Serial.printf("[AudioTask0] Стрим активен. Свободно Heap: %d байт\n", ESP.getFreeHeap());
+    if (_isPlaying && _mp3 && _mp3->isRunning()) {
+        if (!_mp3->loop()) {
+            stopPlaying();
         }
-        #endif
     } else {
-        // Если радио выключено или на паузе — честно усыпляем задачу на 10 мс, разгружая ядро
         vTaskDelay(10 / portTICK_PERIOD_MS);
     }
 }
@@ -382,7 +350,7 @@ void Radio::runNetwork() {
 
         // Если мы играли, но сеть упала — временно глушим поток, чтобы буфер не завис
         if (_isPlaying) {
-            _audio.stopSong();
+            stopPlaying(); 
             display.updatePlayStatus(false);
         }
         return; // Выходим из цикла обработки, пока сеть не восстановится
@@ -486,27 +454,24 @@ void Radio::handleButtons() {
 //  startPlaying() - ФИЗИЧЕСКИЙ ЗАПУСК ИНТЕРНЕТ-СТРИМА (Core 0)
 // ============================================================
 void Radio::startPlaying() {
-    if (config.stationCount == 0) return;
+    if (_mp3)  { _mp3->stop(); delete _mp3; _mp3 = nullptr; }
+    if (_buff) { delete _buff; _buff = nullptr; }
+    if (_file) { delete _file; _file = nullptr; }
 
-    #if DEBUG_MODE
-    Serial.printf("[Core2] Подключение к Bluetooth колонке и хосту: %s\n", config.getCurrentStationName().c_str());
-    #endif
+    String url = config.getCurrentStationURL();
+    _out->SetGain((float)config.volume / 9.0f);
 
-    // === ПЕРЕКЛЮЧАЕМ ДВИЖОК НА BLUETOOTH ===
-    // Вместо физических ножек setPinout мы говорим библиотеке запустить 
-    // встроенный Bluetooth-передатчик (A2DP Source) и привязаться к имени вашей колонки!
-    // Замените "ИМЯ_ВАШЕЙ_КОЛОНКИ" на точное имя (например, "JBL Flip 6" или "Sony SRS-XB13")
-//    _audio.connectToBluetooth("JBL"); 
+    _file = new AudioFileSourceHTTPStream();
+    _file->SetReconnect(3, 3000);
+    _file->open(url.c_str());
+
+    _buff = new AudioFileSourceBuffer(_file, _bufferMem, preallocateBufferSize);
+    _mp3 = new AudioGeneratorMP3();
+    _mp3->begin(_buff, _out);
     
-    // Выставляем системную громкость (библиотека сама смасштабирует её для Bluetooth протокола)
-    _audio.setVolume(config.volume * 2 + 3);
-
-    vTaskDelay(500 / portTICK_PERIOD_MS);
-
-    // Открываем потоковое вещание по URL из config
-    _audio.connecttohost(config.getCurrentStationURL().c_str());
     _isPlaying = true;
 }
+
 
 
 // ============================================================
@@ -889,21 +854,17 @@ void Radio::processCommand(const AudioMessage& msg) {
             break;
 
         case CMD_VOLUME:
-            // Принимаем точное, вычисленное кнопкой или джойстиком значение (шкала 0-9)
             config.volume = msg.value;
-            // Строгая защита от вылета за границы рабочей шкалы
             if (config.volume > 9) config.volume = 9;
             if (config.volume < 0) config.volume = 0;
-            
-            // Применяем формулу для железного уровня громкости библиотеки Audio.h
-            _audio.setVolume(config.volume * 2 + 3);
-            
-            // Обновляем графическую шкалу на экране M5Stick
+
+            // Было: _audio.setVolume(config.volume * 2 + 3);
+            // Стало: Применяем масштабирование громкости (float от 0.0 до 1.0) для новой библиотеки!
+            if (_out) {
+                _out->SetGain((float)config.volume / 9.0f);
+            }
+
             display.updateVolume(config.volume);
-            
-            #if DEBUG_MODE
-            Serial.printf("[AudioCore0] Установлена громкость: %d/9\n", config.volume);
-            #endif
             break;
 
         case CMD_TOGGLE:
@@ -923,31 +884,31 @@ void Radio::processCommand(const AudioMessage& msg) {
 
         case CMD_NEXT: {
             // Запоминаем стартовый статус: играла ли музыка в момент нажатия кнопки/жеста
-            bool wasPlayingBefore = _isPlaying;
+//            bool wasPlayingBefore = _isPlaying;
             
             // 1. АВТО-СТОП: Если стрим активен, мягко глушим текущую станцию на Core 0
-            if (wasPlayingBefore) {
-                stopPlaying();
-            }
+//            if (wasPlayingBefore) {
+//                stopPlaying();
+//            }
             
             // 2. Линейно шагаем по индексу в глобальной оперативной памяти config
-            config.currentStation++;
-            if (config.currentStation >= config.stationCount) {
-                config.currentStation = 0; // Закольцевали с 9-й на 0-ю
-            }
+//            config.currentStation++;
+//            if (config.currentStation >= config.stationCount) {
+//                config.currentStation = 0; // Закольцевали с 9-й на 0-ю
+//            }
             
             // 3. Мгновенно выводим новое текстовое имя и номер канала на экран
-            display.updateStationName(config.getCurrentStationName());
-            drawChannelNumber();
+//            display.updateStationName(config.getCurrentStationName());
+//            drawChannelNumber();
             
             #if DEBUG_MODE
             Serial.printf("[AudioCore0] Канал переключен ВПЕРЕД. Индекс: %d, Название: %s\n", config.currentStation, config.getCurrentStationName().c_str());
             #endif
             
             // 4. АВТО-СТАРТ: Если музыка играла до переключения — мгновенно запускаем новый поток!
-            if (wasPlayingBefore) {
-                startPlaying(); // Сам откроет новый URL из config и зажжет зеленый PLAY
-            }
+//            if (wasPlayingBefore) {
+//                startPlaying(); // Сам откроет новый URL из config и зажжет зеленый PLAY
+//            }
             break;
         }
 
@@ -996,19 +957,19 @@ void Radio::runGyroJoystick() {
         
         switch (cmd) {
             case GYRO_CMD_SHAKE:
-                togglePlay();           // Безопасно отправляет CMD_TOGGLE в очередь
+                //togglePlay();           // Безопасно отправляет CMD_TOGGLE в очередь
                 break;
             case GYRO_CMD_ROLL_UP:
-                setVolume(config.volume + 1); // Безопасно отправляет CMD_VOLUME с новым шагом вверх
+                //setVolume(config.volume + 1); // Безопасно отправляет CMD_VOLUME с новым шагом вверх
                 break;
             case GYRO_CMD_ROLL_DOWN:
-                setVolume(config.volume - 1); // Безопасно отправляет CMD_VOLUME с новым шагом вниз
+                //setVolume(config.volume - 1); // Безопасно отправляет CMD_VOLUME с новым шагом вниз
                 break;
             case GYRO_CMD_PITCH_FWD:
-                nextStation();          // Безопасно отправляет CMD_NEXT в очередь
+                //nextStation();          // Безопасно отправляет CMD_NEXT в очередь
                 break;
             case GYRO_CMD_PITCH_BWD:
-                previousStation();      // Безопасно отправляет CMD_PREV в очередь
+                //previousStation();      // Безопасно отправляет CMD_PREV в очередь
                 break;
             default:
                 break;
@@ -1020,6 +981,7 @@ void Radio::runGyroJoystick() {
 //  ЗАДАЧА УПРАВЛЕНИЯ КНОПКАМИ И ИНТЕРФЕЙСОМ (Выполняется на Core 1 каждые 50 мс)
 // ============================================================
 void Radio::runControl() {
+return;
     if (_commandQueue == nullptr) {
         #if DEBUG_MODE
         Serial.println("[ERROR Core1] Очередь команд пуста в runControl!");

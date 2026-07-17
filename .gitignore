@@ -23,4 +23,4 @@ test/M5StackRadio.ino
 include/
 lib/README
 # Приватный файл контекста для ИИ
-AI_CONTEXT.md
+#AI_CONTEXT.md
