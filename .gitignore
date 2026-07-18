@@ -15,10 +15,8 @@
 .DS_Store
 Thumbs.db
 
-test/APmode.html
-test/Changes.txt
-test/testWebServer.ino
-test/M5StackRadio.ino
+test/
+lib/ESP32-A2DP
 
 include/
 lib/README
